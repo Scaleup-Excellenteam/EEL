@@ -1,0 +1,6 @@
+Zebra arrives last.
+
+!!!
+Mixed CASE stays Displayed.
+Shared sentence across files.
+Numbers 123 survive.

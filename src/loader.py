@@ -1,73 +1,85 @@
-"""Corpus loading. Owner: Qusai (feature/offline-index).
+"""Corpus loading and line-ID assignment."""
 
-M0 STUB — signatures frozen, implementation pending.
-
-See specs/qusai-offline-index.md section 4.
-"""
-
-from collections.abc import Iterator
 from pathlib import Path
 
 from src.models import SentenceData
+from src.normalizer import normalize
 
 
 class Corpus:
-    """Every sentence in the corpus, addressable by line ID.
-
-    THE LINE-ID ORDERING CONTRACT — the highest-risk line in the project:
-
-        Line IDs are assigned in ascending order of
-        `(original_sentence.casefold(), source_text, offset)`
-
-    This is the same key as `AutoCompleteData.sort_key` minus the score. Note it
-    is the ORIGINAL sentence case-folded, not the normalized form.
-
-    Every posting list, sorted by line ID, is then already in the required
-    tie-break order. That makes the alphabetical tie-break free and makes the
-    engine's lazy early termination legal — it can stop at the 5th hit instead
-    of collecting every hit and sorting.
-
-    Breaking this contract produces no exception and no failing assertion, just
-    quietly mis-ordered output. It must be asserted by an explicit test.
-
-    Also required:
-      - EXCLUDE lines whose normalized form is empty (blank lines,
-        punctuation-only lines). They cannot match any non-empty query.
-      - Preserve `original_sentence` byte-for-byte.
-      - 3.45 M dataclass instances is memory-hostile. Store columnar internally
-        and build a `SentenceData` on demand in `__getitem__`.
-    """
+    """A normalized text corpus ordered by the shared line-ID contract."""
 
     alphabet: str
-    """Every distinct character observed after normalization.
 
-    Derived from the actual corpus — never hardcoded. The scorer generates
-    substitution and insertion variants from this, so a wrong alphabet means
-    missed matches.
-    """
+    def __init__(
+        self,
+        originals: tuple[str, ...],
+        normalized_sentences: tuple[str, ...],
+        sources: tuple[str, ...],
+        offsets: tuple[int, ...],
+        alphabet: str,
+    ) -> None:
+        self._originals = originals
+        self._normalized_sentences = normalized_sentences
+        self._sources = sources
+        self._offsets = offsets
+        self.alphabet = alphabet
 
     @classmethod
     def load(cls, root: Path) -> "Corpus":
-        """Walk `root` recursively, reading every .txt file line by line.
+        """Recursively load non-empty normalized lines from ``root``."""
+        root = Path(root)
+        records: list[tuple[str, str, str, int]] = []
+        alphabet_characters: set[str] = set()
 
-        Files sit at varying depths — up to 3 levels in the real corpus. Never
-        assume a flat layout.
+        text_files = sorted(
+            (path for path in root.rglob("*.txt") if path.is_file()),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
+        for path in text_files:
+            source_text = path.relative_to(root).as_posix()
+            with path.open("r", encoding="utf-8", errors="replace", newline="") as file:
+                for offset, physical_line in enumerate(file, start=1):
+                    original_sentence = _without_line_terminator(physical_line)
+                    normalized_sentence = normalize(original_sentence)
+                    if normalized_sentence:
+                        alphabet_characters.update(normalized_sentence)
+                        records.append(
+                            (
+                                original_sentence,
+                                normalized_sentence,
+                                source_text,
+                                offset,
+                            )
+                        )
 
-        Encoding policy must be decided and documented; utf-8 with
-        errors="replace" is the safe default for 1,504 files we did not author.
-        """
-        raise NotImplementedError("Qusai — feature/offline-index")
+        records.sort(key=lambda record: (record[0].casefold(), record[2], record[3]))
+        originals = tuple(record[0] for record in records)
+        normalized_sentences = tuple(record[1] for record in records)
+        sources = tuple(record[2] for record in records)
+        offsets = tuple(record[3] for record in records)
+        alphabet = "".join(sorted(alphabet_characters))
+
+        return cls(originals, normalized_sentences, sources, offsets, alphabet)
 
     def __len__(self) -> int:
-        """Number of sentences, after empty-normalized lines are excluded."""
-        raise NotImplementedError("Qusai — feature/offline-index")
+        return len(self._originals)
 
     def __getitem__(self, line_id: int) -> SentenceData:
-        raise NotImplementedError("Qusai — feature/offline-index")
+        return SentenceData(
+            original_sentence=self._originals[line_id],
+            normalized_sentence=self._normalized_sentences[line_id],
+            source_text=self._sources[line_id],
+            offset=self._offsets[line_id],
+        )
 
     def normalized(self, line_id: int) -> str:
-        """Fast path for verification — avoids building a `SentenceData`."""
-        raise NotImplementedError("Qusai — feature/offline-index")
+        return self._normalized_sentences[line_id]
 
-    def __iter__(self) -> Iterator[SentenceData]:
-        raise NotImplementedError("Qusai — feature/offline-index")
+
+def _without_line_terminator(line: str) -> str:
+    if line.endswith("\r\n"):
+        return line[:-2]
+    if line.endswith(("\r", "\n")):
+        return line[:-1]
+    return line

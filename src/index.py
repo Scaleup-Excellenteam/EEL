@@ -1,73 +1,71 @@
-"""Inverted index. Owner: Qusai (feature/offline-index).
+"""Word-level inverted index for exact normalized substring lookup."""
 
-M0 STUB — signatures frozen, implementation pending.
-
-This module holds the single primitive the entire project reduces to:
-"given an exact string, find the lines containing it — fast."
-
-See specs/qusai-offline-index.md section 5.
-"""
-
-from collections.abc import Iterator
+from array import array
 from pathlib import Path
+import re
+from typing import Iterator
 
 from src.loader import Corpus
 
 
 class InvertedIndex:
-    """Word-level inverted index: word -> sorted list of line IDs.
+    """Find normalized corpus lines containing exact substring patterns."""
 
-    Sizing: ~20 M word occurrences as array('i') is roughly 80 MB. A character
-    4-gram index would need ~480 MB and build far more slowly; it is the escape
-    hatch for short queries, not the plan.
-
-    Build hint: accumulate into per-word Python lists, then freeze into ONE flat
-    array('i') plus a dict[str, tuple[int, int]] of (start, end) slices.
-    Per-word array objects carry too much per-object overhead at ~500 K distinct
-    words.
-    """
+    def __init__(
+        self,
+        corpus: Corpus,
+        postings: array,
+        word_ranges: dict[str, tuple[int, int]],
+    ) -> None:
+        self._corpus = corpus
+        self._postings = postings
+        self._word_ranges = word_ranges
 
     @classmethod
     def build(cls, corpus: Corpus) -> "InvertedIndex":
-        raise NotImplementedError("Qusai — feature/offline-index")
+        postings_by_word: dict[str, list[int]] = {}
+        for line_id in range(len(corpus)):
+            words = set(corpus.normalized(line_id).split())
+            for word in words:
+                postings_by_word.setdefault(word, []).append(line_id)
+
+        postings = array("i")
+        word_ranges: dict[str, tuple[int, int]] = {}
+        for word, line_ids in postings_by_word.items():
+            start = len(postings)
+            postings.extend(line_ids)
+            word_ranges[word] = (start, len(postings))
+
+        return cls(corpus, postings, word_ranges)
 
     def find_lines_containing(self, pattern: str) -> Iterator[int]:
-        """Yield line IDs whose normalized text contains `pattern`.
+        """Yield verified matches lazily in ascending line-ID order."""
+        interior_tokens = _strictly_interior_tokens(pattern)
+        if interior_tokens:
+            ranges: list[tuple[int, int]] = []
+            for token in interior_tokens:
+                posting_range = self._word_ranges.get(token)
+                if posting_range is None:
+                    return
+                ranges.append(posting_range)
 
-        TWO LOAD-BEARING PROPERTIES:
+            start, end = min(ranges, key=lambda bounds: bounds[1] - bounds[0])
+            candidates = (self._postings[index] for index in range(start, end))
+        else:
+            candidates = iter(range(len(self._corpus)))
 
-          - MUST yield in ASCENDING line-ID order. This is what makes the
-            alphabetical tie-break correct.
-          - MUST be LAZY. The caller stops early, usually after 5 results. A
-            version that builds and returns a list is correct but slow, and
-            speed is half the grade.
-
-        `pattern` is already normalized.
-
-        Strategy (specs/qusai-offline-index.md 5.2):
-            1. Split `pattern` on spaces.
-            2. Keep only STRICTLY INTERIOR tokens — those with a space on both
-               sides within the pattern. Edge tokens may be fragments: in
-               `or no` the trailing `no` may be part of `not` and the leading
-               `or` may be part of `for`.
-            3. Of those, pick the token with the SMALLEST posting list.
-            4. Walk that posting list in ascending order, lazily.
-            5. Verify each candidate with `pattern in corpus.normalized(line_id)`.
-            6. Yield the line ID if it verifies.
-
-        The index narrows candidates; verification decides matches. That is what
-        makes this exact rather than approximate.
-
-        Patterns with no strictly interior token take the fallback in section
-        5.4. Note that the assignment's own worked example (`this is`) hits that
-        fallback, so it is the common path for short queries, not an edge case.
-        """
-        raise NotImplementedError("Qusai — feature/offline-index")
+        for line_id in candidates:
+            if pattern in self._corpus.normalized(line_id):
+                yield line_id
 
     def save(self, path: Path) -> None:
-        """Persist the index. Behind a flag — see SPEC.md 7.4."""
-        raise NotImplementedError("Qusai — feature/offline-index")
+        raise NotImplementedError("persistence is deferred until shared M0 integration")
 
     @classmethod
     def load(cls, path: Path) -> "InvertedIndex":
-        raise NotImplementedError("Qusai — feature/offline-index")
+        raise NotImplementedError("persistence is deferred until shared M0 integration")
+
+
+def _strictly_interior_tokens(pattern: str) -> tuple[str, ...]:
+    """Return tokens with a literal space on both sides in ``pattern``."""
+    return tuple(re.findall(r"(?<= )[^ ]+(?= )", pattern))
