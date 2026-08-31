@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Corpus and build artifacts — never commit these
+Archive/
+Archive.zip
+*.idx
+*.index
