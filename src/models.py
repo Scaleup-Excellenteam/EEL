@@ -9,6 +9,8 @@ contract: everyone else builds against their exact shape.
 
 from dataclasses import dataclass
 
+from src.normalizer import normalize
+
 
 @dataclass(frozen=True)
 class SentenceData:
@@ -46,20 +48,34 @@ class AutoCompleteData:
     def sort_key(self) -> tuple[int, str, str, int]:
         """Ordering key: score descending, then the tie-break of SPEC.md 7.2.
 
-        `casefold()` avoids the ASCII artifact where "Zebra" sorts before
-        "apple", which would look broken on screen. `source_text` and `offset`
-        make the order total, so output is deterministic when the same sentence
-        appears in more than one file.
+        The alphabetical part sorts on the NORMALIZED sentence, not the raw one.
+        That matters, and the first version got it wrong:
+
+        Sorting on the raw line lets invisible characters decide the order,
+        because control chars < tab < space < punctuation < digits < letters in
+        ASCII. 40% of the real corpus (964,432 of 2,391,950 lines) starts with
+        whitespace, and countless lines start with '>>>', '*', '#' or a digit.
+        Since the engine returns results in ascending line-ID order and stops at
+        the 5th hit, this was not a cosmetic ordering nit — alphabetically
+        earlier sentences were silently dropped out of the result set entirely.
+        Six equal-scoring matches where only the first was unindented returned
+        the other five and omitted the alphabetically first one.
+
+        Normalizing first makes the key say what the sentence actually says.
+        `source_text` and `offset` then make the order total, so output is
+        deterministic when the same sentence appears in more than one file.
 
         The loader assigns line IDs in ascending
-        `(original_sentence.casefold(), source_text, offset)` order — this key
-        minus the score. The two MUST stay in agreement, or ascending line IDs
-        stop being alphabetical order and the engine's early termination
-        silently returns mis-ordered results.
+        `(normalized_sentence, source_text, offset)` order — this key minus the
+        score. `normalize(completed_sentence)` reproduces the loader's
+        `normalized_sentence` exactly, because the loader computes it from the
+        same original line. The two MUST stay in agreement, or ascending line
+        IDs stop being alphabetical order and early termination silently returns
+        the wrong five results.
         """
         return (
             -self.score,
-            self.completed_sentence.casefold(),
+            normalize(self.completed_sentence),
             self.source_text,
             self.offset,
         )

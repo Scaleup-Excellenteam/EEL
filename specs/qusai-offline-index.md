@@ -75,12 +75,20 @@ class Corpus:
 ### The line-ID ordering contract — the most important thing in your track
 
 > **Line IDs are assigned in ascending order of
-> `(original_sentence.casefold(), source_text, offset)`.**
+> `(normalized_sentence, source_text, offset)`.**
 
-This is **the same key** as `AutoCompleteData.sort_key`. Note it is the
-**original** sentence case-folded, *not* the normalized form. If your key and
-`sort_key` disagree, your ordering and Monjed's ordering disagree and the output
-comes back mis-ordered.
+This is **the same key** as `AutoCompleteData.sort_key` minus the score. If your
+key and `sort_key` disagree, your ordering and Monjed's ordering disagree and the
+output comes back mis-ordered.
+
+> ⚠️ **Corrected at the M1 integration merge.** This spec originally told you to
+> key on `original_sentence.casefold()` — the raw line. That was wrong, and it
+> was a correctness bug, not a cosmetic one. In ASCII, control chars < tab <
+> space < punctuation < digits < letters, and **40% of the real corpus (964,432
+> of 2,391,950 lines) starts with whitespace**. So indentation decided
+> "alphabetical" order, and because the engine stops at the fifth hit,
+> alphabetically earlier sentences were **dropped from the result set entirely**.
+> Sort on `normalized_sentence` — the content — instead. See SPEC.md §7.2.
 
 Every posting list, sorted by line ID, is then *already* in the required
 tie-break order. This makes the alphabetical tie-break free and — critically —
@@ -150,48 +158,84 @@ Build hint: accumulate into per-word Python lists, then freeze into one flat
 `array('i')` plus a `dict[str, tuple[int, int]]` of (start, end) slices. Per-word
 `array` objects carry too much per-object overhead at ~500 K distinct words.
 
-### 5.2 Query strategy: rarest interior word
+### 5.2 Query strategy: classify every token by its word boundary
 
 1. Split `pattern` on spaces.
-2. Keep only **strictly interior** tokens (§5.3).
-3. Of those, pick the one with the **smallest posting list**.
-4. Walk that posting list in ascending order, lazily.
-5. Verify each candidate with `pattern in corpus.normalized(line_id)`.
-6. Yield the line ID if it verifies.
+2. Classify each token by the spaces around it (§5.3) and get its candidate
+   **word** set.
+3. If any token's candidate set is **empty**, the pattern is unmatchable — return
+   immediately. This is the strongest pruner you have.
+4. Otherwise pick the token whose candidate words have the **fewest total
+   postings**.
+5. Walk those postings in ascending order, lazily, merging if there is more than
+   one word.
+6. Verify each candidate with `pattern in corpus.normalized(line_id)`.
+7. Yield the line ID if it verifies.
 
-Instead of scanning 3.45 M lines you scan a few hundred. Verification is what
+Instead of scanning 2.39 M lines you scan a few hundred. Verification is what
 makes this exact rather than approximate — the index narrows candidates, it does
 not decide matches.
 
-### 5.3 Only strictly interior tokens are safe
+### 5.3 Every token sits at a known word boundary
 
-In the pattern `or no`, the trailing `no` may be part of `not` in the sentence,
-and the leading `or` may be part of `for`. Edge tokens are **fragments**, not
-words, so looking them up in a word index would miss real matches.
+The original version of this spec used only *strictly interior* tokens — those
+with a space on both sides — and scanned the whole corpus when there were none.
+That was sound but it was also the main path in practice, because a one- or
+two-word pattern has no interior token at all:
 
-A token is strictly interior when it has a space on both sides *within the
-pattern*:
+```
+'python'              interior tokens: []                -> FULL SCAN
+'this is'             interior tokens: []                -> FULL SCAN
+'import numpy'        interior tokens: []                -> FULL SCAN
+'import numpy as np'  interior tokens: ['numpy', 'as']   -> index
+```
 
-- the first token is interior only if `pattern` starts with a space
-- the last token is interior only if `pattern` ends with a space
-- every other token is interior
+Since the engine walks the score ladder, one mistyped two-word query produced
+909 variants and ~90% of them each scanned all 2,391,950 lines. Measured:
+`numpy arrray` did not finish in four minutes; `interpretor` took 129 s.
 
-So `or no` has **no** interior token and needs the fallback. `or not the` has
-one: `not`.
+The fix is that interiority is not the only thing a space tells you. **Each of
+the four boundary cases is soundly indexable:**
 
-### 5.4 Short-query fallback
+| Spaces around the token | The token is a word... | Lookup |
+|---|---|---|
+| both sides | **whole word** | dict hit |
+| before only | **prefix** | bisect on sorted words |
+| after only | **suffix** | bisect on sorted *reversed* words |
+| neither | **infix** | `str.find` over a blob of the vocabulary |
 
-For patterns with no strictly interior token, in order of preference:
+A token is space-bounded on the left when it is not the first token, or the
+pattern starts with a space; and on the right when it is not the last token, or
+the pattern ends with a space.
 
-1. If an edge token happens to be a complete corpus word, use it anyway as a
-   candidate source, then verify. It may over-generate candidates but never
-   under-generates — verification catches the rest.
-2. Otherwise brute-scan in ascending line-ID order with early termination. This
-   is legal precisely because of the ordering contract, and short patterns match
-   enormous numbers of lines, so it terminates almost immediately.
+So `numpy arrray` classifies as suffix(`numpy`) + prefix(`arrray`). No corpus
+word starts with `arrray`, so the pattern is rejected in microseconds instead of
+after a full scan. Worst case across a 12-query benchmark fell from *not
+finishing* to **255 ms**.
 
-**Do not build a trigram index speculatively.** Measure the fallback first. If
-measurement shows it is the bottleneck, that is the moment to reach for it.
+### 5.4 The unsound shortcut — do not take it
+
+This section previously said: *"if an edge token happens to be a complete corpus
+word, use it anyway as a candidate source; it may over-generate candidates but
+never under-generates."*
+
+**That was wrong.** It under-generates, and silently:
+
+```
+line:    'bathis isnt here'      words = ['bathis', 'isnt', 'here']
+pattern: 'this is'               IS a substring of that line
+                                 but the line has NO word 'this'
+```
+
+Treating the edge token `this` as a whole word would look up postings for
+`this`, never see that line, and drop a real match with no error. The prefix and
+suffix lookups in §5.3 are the sound way to use an edge token: they ask "which
+corpus words *end* with `this`?", which is a question the index can answer
+correctly.
+
+`tests/test_index_soundness.py` pins this case specifically, plus ~4,000
+differential comparisons against brute force on adversarial vocabularies where
+every word embeds another.
 
 ### 5.5 Persistence
 
@@ -236,7 +280,7 @@ thousand.
 
 ## 8. Definition of done
 
-- [ ] Fixture corpus loads; the `(original_sentence.casefold(), source_text,
+- [ ] Fixture corpus loads; the `(normalized_sentence, source_text,
       offset)` ordering contract is asserted by an explicit test
 - [ ] Empty-normalized lines excluded; `original_sentence` preserved byte-for-byte
 - [ ] `alphabet` derived from the corpus, not hardcoded

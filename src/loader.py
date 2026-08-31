@@ -53,7 +53,18 @@ class Corpus:
                             )
                         )
 
-        records.sort(key=lambda record: (record[0].casefold(), record[2], record[3]))
+        # THE LINE-ID ORDERING CONTRACT: ascending
+        # (normalized_sentence, source_text, offset) — record[1], [2], [3].
+        # This must stay identical to AutoCompleteData.sort_key minus the score,
+        # or ascending line IDs stop being alphabetical order and the engine's
+        # early termination silently returns the wrong five results.
+        #
+        # It sorts on record[1] (normalized) and NOT record[0] (the raw line).
+        # Sorting on the raw line lets leading whitespace and punctuation decide
+        # "alphabetical" order: 40% of this corpus is indented, so every indented
+        # line outranked every letter-initial line, and equal-scoring sentences
+        # that were alphabetically earlier got dropped out of the top 5.
+        records.sort(key=lambda record: (record[1], record[2], record[3]))
         originals = tuple(record[0] for record in records)
         normalized_sentences = tuple(record[1] for record in records)
         sources = tuple(record[2] for record in records)

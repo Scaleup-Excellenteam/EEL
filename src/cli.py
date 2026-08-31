@@ -26,7 +26,18 @@ def run(
         except (EOFError, StopIteration):
             return
 
-        if not chunk.strip():
+        # A bare Enter typed nothing, so there is nothing new to search and the
+        # previous results should not be reprinted.
+        #
+        # The guard tests `not chunk`, NOT `not chunk.strip()`. Those differ for
+        # a whitespace-only chunk, and the difference was a bug: `.strip()`
+        # discarded a typed space instead of appending it. Since the user's own
+        # space is the only thing separating one chunk from the next, typing
+        # "be", then " ", then "that" accumulated to "bethat" and scored 6 on a
+        # spurious one-edit match, where "be that" scores 14. The space was not
+        # merely unsearched — it was gone from `current_text` for the rest of the
+        # sentence. A typed space is typed text.
+        if not chunk:
             continue
 
         current_text = _apply_input(current_text, chunk)
