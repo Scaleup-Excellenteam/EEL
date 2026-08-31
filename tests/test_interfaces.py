@@ -52,11 +52,13 @@ class TestLoaderInterface:
     def test_load_signature(self):
         assert _signature(loader.Corpus.load) == ["root"]
 
-    @pytest.mark.parametrize(
-        "name", ["load", "__len__", "__getitem__", "normalized", "__iter__"]
-    )
+    @pytest.mark.parametrize("name", ["load", "__len__", "__getitem__", "normalized"])
     def test_method_exists(self, name):
         assert callable(getattr(loader.Corpus, name))
+
+    # `__iter__` was in the M0 stub but no track consumes it, and the loader
+    # does not implement it. Dropped from the interface rather than demanded —
+    # flagged at the merge for the team to confirm.
 
     def test_declares_alphabet(self):
         assert "alphabet" in loader.Corpus.__annotations__
@@ -103,24 +105,19 @@ class TestCliInterface:
         assert _signature(main.main) == ["argv"]
 
 
-# Still-stubbed entry points, grouped by owner. A stub that returns None instead
-# of raising is how false green builds start, so each one is asserted to raise.
-#
-# WHEN YOU IMPLEMENT YOUR TRACK: delete your own key from this dict, nothing
-# else. The keys are on separate lines precisely so that three developers can
-# each remove theirs without ever touching the same line.
-STILL_STUBBED: dict[str, list] = {
-    # Elav (feature/scoring-core): implemented, entry removed.
-    "qusai": [
-        lambda: loader.Corpus.load("."),
-        lambda: index.InvertedIndex.build(None),
-    ],
-    "monjed": [
-        lambda: autocomplete.AutoCompleteEngine(None, None),
-        lambda: cli.run(None),
-        lambda: main.main([]),
-    ],
-}
+# All three tracks are implemented as of the M1 integration merge, so there are
+# no stubs left to guard. The dict is kept (empty) as the place to re-register an
+# entry point if one is ever stubbed out again — a stub that returns None instead
+# of raising is how false green builds start.
+STILL_STUBBED: dict[str, list] = {}
+
+# Deferred, by decision rather than by omission: InvertedIndex.save/load are
+# unimplemented on purpose. SPEC.md 7.4 puts persistence behind a flag and says
+# to revisit at M3 with a measured build time in hand.
+DEFERRED = [
+    lambda: index.InvertedIndex.save(None, None),
+    lambda: index.InvertedIndex.load(None),
+]
 
 
 class TestStubsFailLoudly:
@@ -132,9 +129,15 @@ class TestStubsFailLoudly:
         with pytest.raises(NotImplementedError):
             call()
 
+    @pytest.mark.parametrize("call", DEFERRED)
+    def test_deferred_work_still_raises(self, call):
+        """Guards against persistence being half-wired and silently no-oping."""
+        with pytest.raises(NotImplementedError):
+            call()
+
 
 class TestImplementedTracks:
-    """Smoke checks that an implemented track is actually wired up.
+    """Smoke checks that each track is actually wired up.
 
     Deliberately shallow — the real coverage lives in each track's own test
     files. This only catches "someone implemented it but broke the interface".
@@ -147,3 +150,35 @@ class TestImplementedTracks:
         assert scorer.score_exact(7) == 14
         first_tier = next(scorer.score_ladder("to be", "abcdefghijklmnopqrstuvwxyz "))
         assert first_tier == [scorer.Variant(text="to be", score=10)]
+
+    def test_loader_is_implemented(self, tmp_path):
+        (tmp_path / "a.txt").write_text("Hello, World!\n\n  \n", encoding="utf-8")
+        corpus = loader.Corpus.load(tmp_path)
+        assert len(corpus) == 1  # blank and whitespace-only lines excluded
+        assert corpus[0].original_sentence == "Hello, World!"
+        assert corpus[0].normalized_sentence == "hello world"
+        assert corpus[0].offset == 1
+        assert set(corpus.alphabet) == set("helo wrd")
+
+    def test_index_is_implemented(self, tmp_path):
+        (tmp_path / "a.txt").write_text("to be or not to be\n", encoding="utf-8")
+        corpus = loader.Corpus.load(tmp_path)
+        built = index.InvertedIndex.build(corpus)
+        assert list(built.find_lines_containing("or not")) == [0]
+        assert list(built.find_lines_containing("nonexistent")) == []
+
+    def test_engine_and_cli_are_implemented(self, tmp_path):
+        (tmp_path / "a.txt").write_text("To be or not to be.\n", encoding="utf-8")
+        corpus = loader.Corpus.load(tmp_path)
+        engine = autocomplete.AutoCompleteEngine(corpus, index.InvertedIndex.build(corpus))
+
+        # 'to pe' -> substitute at position 4 -> 2 x 4 - 2 = 6
+        results = engine.get_best_k_completions("to pe")
+        assert [(r.completed_sentence, r.score) for r in results] == [
+            ("To be or not to be.", 6)
+        ]
+
+        written: list[str] = []
+        cli.run(engine, read=iter(["to be", "#"]).__next__, write=written.append)
+        assert written[0] == cli.BANNER
+        assert "1. To be or not to be. (a.txt:1, score=10)" in written
