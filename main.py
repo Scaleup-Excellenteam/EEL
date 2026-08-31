@@ -1,35 +1,28 @@
-"""Entry point. Owner: Monjed (feature/online-search).
-
-M0 STUB — signature frozen, implementation pending.
-
-This is what the grader runs. Keep it thin: wiring only, no logic. Anything
-worth testing belongs in autocomplete.py or cli.py.
-
-    python main.py [corpus_root]
-"""
+"""Entry point. Owner: Monjed (feature/online-search)."""
 
 import sys
 from pathlib import Path
 
-# The assignment says the offline stage reads the text files "ממקום ידוע מראש" —
-# from a location known in advance. This is that location; override via argv[1].
+from src.autocomplete import AutoCompleteEngine
+from src.cli import run
+from src.index import InvertedIndex
+from src.loader import Corpus
+
+# The assignment says the offline stage reads from a known location.
 DEFAULT_CORPUS_ROOT = Path("Archive")
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the offline stage, then hand control to the online loop.
+    """Run the offline stage, then hand control to the online loop."""
+    args = [] if argv is None else argv
+    root = Path(args[0]) if args else DEFAULT_CORPUS_ROOT
 
-        root = Path(argv[0]) if argv else DEFAULT_CORPUS_ROOT
-        corpus = Corpus.load(root)          # offline
-        index = InvertedIndex.build(corpus) # offline
-        engine = AutoCompleteEngine(corpus, index)
-        print(BANNER)                       # readiness banner
-        run(engine)                         # online
+    corpus = Corpus.load(root)
+    index = InvertedIndex.build(corpus)
+    engine = AutoCompleteEngine(corpus, index)
+    run(engine)
 
-    The banner prints only AFTER the build completes, which is why the build is
-    user-visible and why its duration matters (SPEC.md 7.4).
-    """
-    raise NotImplementedError("Monjed — feature/online-search")
+    return 0
 
 
 if __name__ == "__main__":

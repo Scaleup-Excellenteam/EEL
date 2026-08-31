@@ -1,9 +1,4 @@
-"""Interactive loop. Owner: Monjed (feature/online-search).
-
-M0 STUB — signatures frozen, implementation pending.
-
-See specs/monjed-online-search.md section 4.
-"""
+"""Interactive loop. Owner: Monjed (feature/online-search)."""
 
 from collections.abc import Callable
 
@@ -21,47 +16,37 @@ def run(
     read: Callable[[], str] = input,
     write: Callable[[str], None] = print,
 ) -> None:
-    """Run the online loop until end of input.
+    """Run the online loop until end of input."""
+    current_text = ""
+    write(BANNER)
 
-    `read` and `write` are injected so the loop can be tested without a real
-    terminal. Monjed may change this signature at the M0 review if he prefers a
-    different testing seam — it is a proposal, not a decree.
-
-    Required behaviour (assignment section "תוכנית שלמה"):
-
-        state: current_text = ""
-
-        print BANNER once
-        loop:
+    while True:
+        try:
             chunk = read()
-            if chunk == RESET_CHAR:
-                current_text = ""          # back to the initial state
-                continue
-            current_text += chunk          # ACCUMULATE, do not replace
-            show the best 5 completions for current_text
-            write(current_text)            # echo, so the user continues from
-                                           # where they stopped
+        except (EOFError, StopIteration):
+            return
 
-    The trailing echo is not decoration — it is the cursor position, and the
-    assignment's sample output shows it explicitly.
+        if not chunk.strip():
+            continue
 
-    Output format, per the assignment's sample:
+        current_text = _apply_input(current_text, chunk)
+        if not current_text.strip():
+            continue
 
-        The system is ready. Enter your text:
-        this is
-        Here are 5 suggestions:
-        1. Alpha: this is a demo. (example.txt:1, score=14)
-        ...
-        this is
+        suggestions = engine.get_best_k_completions(current_text)
+        if suggestions:
+            write(SUGGESTIONS_HEADER.format(n=len(suggestions)))
+            for rank, suggestion in enumerate(suggestions, start=1):
+                write(f"{rank}. {suggestion}")
+        else:
+            write(NO_MATCHES)
 
-    Each suggestion line is `f"{rank}. {result}"`, where `result` is an
-    `AutoCompleteData` rendered by its own `__str__`.
+        write(current_text)
 
-    Edge cases to handle:
-      - empty input (bare Enter): do not crash, do not search
-      - fewer than 5 matches: print what exists, do not pad
-      - no matches at all: say so plainly, do NOT clear the accumulated text
-      - `#` typed mid-word, and `#` typed when the query is already empty
-      - whitespace-only input
-    """
-    raise NotImplementedError("Monjed — feature/online-search")
+
+def _apply_input(current_text: str, chunk: str) -> str:
+    """Apply one entered chunk, treating '#' as a sentence reset marker."""
+    if RESET_CHAR not in chunk:
+        return current_text + chunk
+
+    return chunk.rsplit(RESET_CHAR, maxsplit=1)[1]
