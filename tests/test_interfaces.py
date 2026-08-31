@@ -103,27 +103,47 @@ class TestCliInterface:
         assert _signature(main.main) == ["argv"]
 
 
-class TestStubsFailLoudly:
-    """A stub returning None instead of raising is how false green builds start."""
+# Still-stubbed entry points, grouped by owner. A stub that returns None instead
+# of raising is how false green builds start, so each one is asserted to raise.
+#
+# WHEN YOU IMPLEMENT YOUR TRACK: delete your own key from this dict, nothing
+# else. The keys are on separate lines precisely so that three developers can
+# each remove theirs without ever touching the same line.
+STILL_STUBBED: dict[str, list] = {
+    # Elav (feature/scoring-core): implemented, entry removed.
+    "qusai": [
+        lambda: loader.Corpus.load("."),
+        lambda: index.InvertedIndex.build(None),
+    ],
+    "monjed": [
+        lambda: autocomplete.AutoCompleteEngine(None, None),
+        lambda: cli.run(None),
+        lambda: main.main([]),
+    ],
+}
 
+
+class TestStubsFailLoudly:
     @pytest.mark.parametrize(
-        "call",
-        [
-            lambda: normalizer.normalize("x"),
-            lambda: scorer.substitution_penalty(1),
-            lambda: scorer.indel_penalty(1),
-            lambda: scorer.score_exact(1),
-            lambda: scorer.score_substitution(1, 1),
-            lambda: scorer.score_extra_char(1, 1),
-            lambda: scorer.score_missing_char(1, 1),
-            lambda: scorer.score_ladder("x", "abc"),
-            lambda: loader.Corpus.load("."),
-            lambda: index.InvertedIndex.build(None),
-            lambda: autocomplete.AutoCompleteEngine(None, None),
-            lambda: cli.run(None),
-            lambda: main.main([]),
-        ],
+        "owner,call",
+        [(owner, call) for owner, calls in STILL_STUBBED.items() for call in calls],
     )
-    def test_raises_not_implemented(self, call):
+    def test_raises_not_implemented(self, owner, call):
         with pytest.raises(NotImplementedError):
             call()
+
+
+class TestImplementedTracks:
+    """Smoke checks that an implemented track is actually wired up.
+
+    Deliberately shallow — the real coverage lives in each track's own test
+    files. This only catches "someone implemented it but broke the interface".
+    """
+
+    def test_normalizer_is_implemented(self):
+        assert normalizer.normalize("To be, or NOT to be") == "to be or not to be"
+
+    def test_scorer_is_implemented(self):
+        assert scorer.score_exact(7) == 14
+        first_tier = next(scorer.score_ladder("to be", "abcdefghijklmnopqrstuvwxyz "))
+        assert first_tier == [scorer.Variant(text="to be", score=10)]
