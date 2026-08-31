@@ -1,0 +1,3 @@
+Shared sentence across files.
+An apple starts first.
+Deeply nested text.
