@@ -1,13 +1,10 @@
-"""Search orchestration. Owner: Monjed (feature/online-search).
-
-M0 STUB — signatures frozen, implementation pending.
-
-See specs/monjed-online-search.md section 3.
-"""
+import heapq
 
 from src.index import InvertedIndex
 from src.loader import Corpus
 from src.models import AutoCompleteData
+from src.normalizer import normalize
+from src.scorer import score_ladder
 
 DEFAULT_K = 5
 
@@ -16,54 +13,48 @@ class AutoCompleteEngine:
     """Assembles the scorer's ladder and the index's lookups into an answer."""
 
     def __init__(self, corpus: Corpus, index: InvertedIndex) -> None:
-        raise NotImplementedError("Monjed — feature/online-search")
+        self.corpus = corpus
+        self.index = index
 
     def get_best_k_completions(
         self, prefix: str, k: int = DEFAULT_K
     ) -> list[AutoCompleteData]:
-        """Return the best `k` completions for `prefix`, best score first.
+        """Return the best `k` completions for `prefix`, best score first."""
+        if k <= 0:
+            return []
 
-        The name and the `prefix` parameter are mandated by the assignment. Keep
-        them exactly, misleading as `prefix` is — the match is a substring
-        ANYWHERE in the sentence, not a prefix.
+        normalized = normalize(prefix)
+        if not normalized:
+            return []
 
-        Algorithm:
+        results: list[AutoCompleteData] = []
+        seen: set[int] = set()
 
-            normalized = normalize(prefix)
-            results, seen = [], set()
+        for group in score_ladder(normalized, self.corpus.alphabet):
+            if not group:
+                continue
 
-            for group in score_ladder(normalized, corpus.alphabet):
-                # each variant yields its OWN ascending stream — MERGE them
-                streams = [index.find_lines_containing(v.text) for v in group]
-                for line_id in heapq.merge(*streams):
-                    if line_id in seen:
-                        continue
-                    seen.add(line_id)
-                    results.append(...)      # score comes from the group
-                    if len(results) == k:
-                        return results
-            return results
+            score = group[0].score
+            streams = [
+                self.index.find_lines_containing(variant.text) for variant in group
+            ]
 
-        THREE THINGS TO GET RIGHT:
+            for line_id in heapq.merge(*streams):
+                if line_id in seen:
+                    continue
 
-        1. MERGE within a tier, never sort. A tier holds several variants (tier
-           2L-4 holds three edit kinds), each with its own ascending stream. The
-           streams are individually sorted but not jointly sorted, so combine
-           with heapq.merge. Concatenating and sorting would drain every stream
-           and destroy early termination.
+                seen.add(line_id)
+                sentence = self.corpus[line_id]
+                results.append(
+                    AutoCompleteData(
+                        completed_sentence=sentence.original_sentence,
+                        source_text=sentence.source_text,
+                        offset=sentence.offset,
+                        score=score,
+                    )
+                )
 
-        2. Dedup by LINE ID, not by text, and a line keeps its FIRST score.
-           Walking tiers in descending order means the first sighting of a line
-           is at its best achievable score. The same sentence in two different
-           files is two distinct lines and may legitimately take two slots.
+                if len(results) == k:
+                    return results
 
-        3. The tie-break is FREE. Ascending line IDs already are alphabetical
-           order, by the loader's ordering contract. Appending in arrival order
-           is correct. If you ever feel the need to sort, that contract has been
-           violated upstream — raise it with Qusai rather than papering over it
-           here.
-
-        No edit distance is ever computed. If you find yourself writing one, the
-        design has been misread.
-        """
-        raise NotImplementedError("Monjed — feature/online-search")
+        return results

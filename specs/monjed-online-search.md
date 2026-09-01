@@ -117,7 +117,7 @@ two distinct lines and may legitimately occupy two result slots — that is
 output.
 
 **3. The tie-break is free — do not re-implement it.**
-Qusai assigns line IDs in ascending `(original_sentence.casefold(), source_text,
+Qusai assigns line IDs in ascending `(normalized_sentence, source_text,
 offset)` order, which is exactly `AutoCompleteData.sort_key` minus the score. So
 ascending line IDs *are* the required alphabetical order. Combined with
 `heapq.merge`, results arrive already correctly ordered — appending in arrival

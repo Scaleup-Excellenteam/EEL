@@ -133,16 +133,29 @@ substring lookup → dedup → return best 5
 A word-level inverted index: `word → sorted list of line IDs containing it`.
 Roughly 20 M word occurrences as `array('i')` ≈ 80 MB RAM.
 
-To find lines containing a pattern, take the pattern's **rarest interior word**,
-walk its posting list, and verify each candidate with a direct substring check.
-Instead of scanning 3.45 M lines we scan a few hundred. The index narrows
-candidates; verification decides matches.
+To find lines containing a pattern, classify each of its tokens by the spaces
+around it, take the token whose candidate words have the fewest postings, walk
+those postings, and verify each candidate with a direct substring check. Instead
+of scanning 2.39 M lines we scan a few hundred. The index narrows candidates;
+verification decides matches.
 
-**Only strictly interior words are safe to look up.** In the pattern `or no`, the
-trailing `no` may be part of `not` and the leading `or` may be part of `for`.
-Edge tokens are fragments, not words. A token is strictly interior when it has a
-space on both sides *within the pattern*. Patterns with no interior token use the
-fallback in `specs/qusai-offline-index.md` §5.4.
+**Every token sits at a known word boundary, and all four cases are soundly
+indexable:**
+
+| Spaces around the token | The token is a word... | Lookup |
+|---|---|---|
+| both sides | whole word | dict hit |
+| before only | prefix | bisect on sorted words |
+| after only | suffix | bisect on sorted *reversed* words |
+| neither | infix | `str.find` over a blob of the vocabulary |
+
+An empty candidate set proves the pattern unmatchable, which is the strongest
+pruner in the system — a mistyped token like `arrray` prefixes no corpus word, so
+it is rejected in microseconds rather than after a full scan.
+
+**Do not shortcut this by treating an edge token as a whole word.** It is
+unsound: the line `bathis isnt here` contains `this is` yet has no word `this`.
+See `specs/qusai-offline-index.md` §5.4.
 
 ---
 
@@ -168,7 +181,7 @@ class AutoCompleteData:
     score: int
 
     def sort_key(self) -> tuple[int, str, str, int]:
-        """(-score, completed_sentence.casefold(), source_text, offset)"""
+        """(-score, normalize(completed_sentence), source_text, offset)"""
 
     def __str__(self) -> str:
         """'<sentence> (<source>:<offset>, score=<score>)'"""
@@ -235,7 +248,7 @@ all three developers.
 ### The line-ID ordering contract
 
 > **Line IDs are assigned in ascending order of
-> `(original_sentence.casefold(), source_text, offset)`** — the same key as
+> `(normalized_sentence, source_text, offset)`** — the same key as
 > `AutoCompleteData.sort_key` minus the score.
 
 Every posting list, sorted by line ID, is then *already* in the required
@@ -263,12 +276,36 @@ rather than against opinion.
 "מיקום/שורה" — position/line — and its sample output prints `example.txt:1` …
 `example.txt:5` for a five-line file.
 
-**7.2 Tie-break key is `(-score, completed_sentence.casefold(), source_text,
+**7.2 Tie-break key is `(-score, normalize(completed_sentence), source_text,
 offset)`.** The assignment says equal scores sort alphabetically without naming
-which form of the text. We sort by the **displayed** sentence, case-folded:
-sorting by what is printed is the only reading a grader can verify by eye;
-`casefold()` avoids the ASCII artifact where `"Zebra" < "apple"`; and
-`source_text` then `offset` make the order total, so output is deterministic.
+which form of the text. We sort by the **normalized** sentence, so that the key
+says what the sentence actually says. `source_text` then `offset` make the order
+total, so output is deterministic.
+
+> ⚠️ **Corrected at the M1 integration merge.** This previously specified
+> `completed_sentence.casefold()` — the raw displayed line — reasoning that
+> sorting by what is printed is what a grader can verify by eye. That was wrong,
+> and it was a correctness bug rather than a cosmetic one.
+>
+> In ASCII, control chars < tab < space < punctuation < digits < letters. **40%
+> of the real corpus (964,432 of 2,391,950 lines) starts with whitespace**, and
+> vast numbers of lines start with `>>>`, `*`, `#` or a digit. The raw key
+> therefore let invisible characters decide "alphabetical" order. Because the
+> engine returns results in ascending line-ID order and stops at the fifth hit,
+> alphabetically earlier sentences were not merely mis-ordered — they were
+> **dropped out of the result set entirely**.
+>
+> Demonstrated: six equal-scoring matches with only the first unindented. The
+> system returned the five indented ones and omitted `Alpha calls the parser.`,
+> alphabetically first of the six. Case-folding does not fix this, and nor does
+> stripping leading whitespace, because leading punctuation dominates just as
+> badly.
+>
+> `normalize(completed_sentence)` reproduces the loader's `normalized_sentence`
+> exactly, since the loader computes it from the same original line — so the key
+> stays derivable from the four mandated fields without adding a fifth.
+> `tests/test_models.py` now asserts the two agree against a really loaded
+> corpus, not against a restatement of the formula.
 
 **7.3 Dedup by line ID, not by text.** A single corpus line must never occupy two
 result slots. An identical sentence in two *different* files is two distinct

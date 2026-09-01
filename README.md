@@ -7,9 +7,22 @@ CLI. Google Project 2026, Part A.
 
 ## Status
 
-M0 complete — interfaces frozen. Every module below is a stub that raises
-`NotImplementedError` except `src/models.py`, which is fully implemented because
-it *is* the shared contract.
+**M1 complete and integrated.** All three tracks are implemented and merged; the
+system runs end to end on the full 121 MB corpus and reproduces the assignment's
+sample output byte for byte.
+
+Measured on the real corpus (2,391,950 sentences after empty lines are excluded):
+
+| | |
+|---|---|
+| offline (load + index) | **21 s**, ~1.2 GB RSS |
+| query latency, typical | **under 1 ms** |
+| query latency, worst of 12 | **137 ms** |
+| tests | 256 passing |
+
+Deferred by decision, not omission: `InvertedIndex.save`/`load` — persistence is
+behind a flag per `SPEC.md` §7.4, revisited at M3 now that the build time is
+measured at 21 s.
 
 ## Setup
 

@@ -71,11 +71,19 @@ def test_loads_fixture_recursively_and_preserves_line_metadata() -> None:
     assert all(record.original_sentence not in {"", "!!!"} for record in records)
 
 
-def test_line_ids_follow_shared_original_sentence_ordering_contract() -> None:
+def test_line_ids_follow_shared_normalized_sentence_ordering_contract() -> None:
+    """The contract is keyed on normalized_sentence, NOT the raw original line.
+
+    This test previously asserted `original_sentence.casefold()` and passed only
+    because this fixture happens to order the same way under both keys. On the
+    real corpus they differ sharply: 40% of lines are indented, and sorting on
+    the raw line let leading whitespace outrank every letter, which silently
+    dropped alphabetically earlier equal-scoring matches out of the top 5.
+    """
     corpus = Corpus.load(FIXTURE_ROOT)
     records = [corpus[line_id] for line_id in range(len(corpus))]
     actual_keys = [
-        (record.original_sentence.casefold(), record.source_text, record.offset)
+        (record.normalized_sentence, record.source_text, record.offset)
         for record in records
     ]
 
@@ -94,6 +102,33 @@ def test_line_ids_follow_shared_original_sentence_ordering_contract() -> None:
         ("Gamma: this is a demo.", "example.txt", 4),
         ("Omega: this is a demo.", "example.txt", 5),
     ]
+
+
+def test_indentation_does_not_decide_line_id_order(tmp_path) -> None:
+    """Regression guard for the tie-break bug, on data that distinguishes the keys.
+
+    Under the old `original_sentence.casefold()` key this would order
+    Zeta, Yak, Beta, Alpha — indentation and '>' first, letters last.
+    """
+    (tmp_path / "doc.txt").write_text(
+        "Alpha calls the parser.\n"
+        "    Zeta calls the parser.\n"
+        "\tYak calls the parser.\n"
+        ">>> Beta calls the parser.\n",
+        encoding="utf-8",
+    )
+    corpus = Corpus.load(tmp_path)
+    leading_words = [
+        corpus[line_id].normalized_sentence.split()[0]
+        for line_id in range(len(corpus))
+    ]
+
+    assert leading_words == ["alpha", "beta", "yak", "zeta"]
+
+
+def test_ordering_details_on_the_fixture_corpus() -> None:
+    corpus = Corpus.load(FIXTURE_ROOT)
+    records = [corpus[line_id] for line_id in range(len(corpus))]
 
     line_ids = {
         record.original_sentence: line_id
