@@ -5,6 +5,7 @@ from src.loader import Corpus
 from src.models import AutoCompleteData
 from src.normalizer import normalize
 from src.scorer import score_ladder
+from src.typo_cache import TypoCache
 
 DEFAULT_K = 5
 
@@ -15,6 +16,7 @@ class AutoCompleteEngine:
     def __init__(self, corpus: Corpus, index: InvertedIndex) -> None:
         self.corpus = corpus
         self.index = index
+        self.typo_cache = TypoCache()
 
     def get_best_k_completions(
         self, prefix: str, k: int = DEFAULT_K
@@ -29,11 +31,14 @@ class AutoCompleteEngine:
 
         results: list[AutoCompleteData] = []
         seen: set[int] = set()
+        matched_exactly = False
+        recorded_typo = False
 
         for group in score_ladder(normalized, self.corpus.alphabet):
             if not group:
                 continue
 
+            group = self.typo_cache.prioritize(normalized, group)
             score = group[0].score
             streams = [
                 self.index.find_lines_containing(variant.text) for variant in group
@@ -53,6 +58,22 @@ class AutoCompleteEngine:
                         score=score,
                     )
                 )
+
+                if not recorded_typo:
+                    haystack = sentence.normalized_sentence
+                    if normalized in haystack:
+                        matched_exactly = True
+                    elif not matched_exactly:
+                        for variant in group:
+                            if (
+                                variant.text != normalized
+                                and variant.text in haystack
+                            ):
+                                self.typo_cache.record_match(
+                                    normalized, variant.text
+                                )
+                                recorded_typo = True
+                                break
 
                 if len(results) == k:
                     return results
