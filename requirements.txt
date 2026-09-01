@@ -1,4 +1,7 @@
-# Runtime: none. The core algorithm is standard library only.
+# Runtime
+streamlit>=1.37
+
+# The core algorithm is standard library only.
 # External libraries are permitted (SPEC.md 7.6) — add here if one earns its way in.
 
 # Development
