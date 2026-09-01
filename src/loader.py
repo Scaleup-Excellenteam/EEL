@@ -1,5 +1,6 @@
 """Corpus loading and line-ID assignment."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from src.models import SentenceData
@@ -75,6 +76,10 @@ class Corpus:
 
     def normalized(self, line_id: int) -> str:
         return self._normalized_sentences[line_id]
+
+    def __iter__(self) -> Iterator[SentenceData]:
+        for line_id in range(len(self)):
+            yield self[line_id]
 
 
 def _without_line_terminator(line: str) -> str:
