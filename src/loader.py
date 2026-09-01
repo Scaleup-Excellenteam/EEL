@@ -87,6 +87,32 @@ class Corpus:
     def normalized(self, line_id: int) -> str:
         return self._normalized_sentences[line_id]
 
+    def to_snapshot(self) -> dict:
+        """Plain-data representation of this corpus, for ZDT snapshot persistence.
+
+        `InvertedIndex.save` embeds this alongside the index, so a later
+        process can reconstruct the corpus without re-walking the corpus root
+        — the offline→filesystem→online hand-off SPEC.md 7.4 defers to M3.
+        """
+        return {
+            "originals": self._originals,
+            "normalized_sentences": self._normalized_sentences,
+            "sources": self._sources,
+            "offsets": self._offsets,
+            "alphabet": self.alphabet,
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "Corpus":
+        """Inverse of `to_snapshot`."""
+        return cls(
+            originals=data["originals"],
+            normalized_sentences=data["normalized_sentences"],
+            sources=data["sources"],
+            offsets=data["offsets"],
+            alphabet=data["alphabet"],
+        )
+
 
 def _without_line_terminator(line: str) -> str:
     if line.endswith("\r\n"):

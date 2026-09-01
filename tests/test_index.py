@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
+import pickle
 import re
 import sys
 from types import GeneratorType, ModuleType
@@ -242,10 +243,63 @@ def test_repeated_word_adds_line_id_to_posting_only_once() -> None:
     assert list(index.find_lines_containing(" repeat ")) == [0]
 
 
-def test_persistence_is_deferred_to_m3(corpus: Corpus, tmp_path: Path) -> None:
-    index = InvertedIndex.build(corpus)
+# `test_persistence_is_deferred_to_m3` used to assert `save`/`load` raised
+# NotImplementedError, per SPEC.md 7.4 ("revisit at M3 now that the build time
+# is measured"). The README already records that measurement (21 s on the full
+# corpus), and the ZDT feature is that revisit: `save`/`load` are now real, and
+# are exactly the filesystem hand-off ZDT's offline build and online service
+# use to publish and load a snapshot without either process touching the
+# other's memory. The old expectation is deliberately replaced, not deleted
+# outright, by the round-trip tests below.
 
-    with pytest.raises(NotImplementedError):
-        index.save(tmp_path / "index.bin")
-    with pytest.raises(NotImplementedError):
-        InvertedIndex.load(tmp_path / "index.bin")
+
+def test_save_then_load_round_trips_index_and_corpus(
+    corpus: Corpus, tmp_path: Path
+) -> None:
+    index = InvertedIndex.build(corpus)
+    snapshot_path = tmp_path / "snapshot.index"
+
+    index.save(snapshot_path)
+    loaded = InvertedIndex.load(snapshot_path)
+
+    for pattern in ("this is a", "shared sentence across files", "mixed case"):
+        assert list(loaded.find_lines_containing(pattern)) == list(
+            index.find_lines_containing(pattern)
+        )
+    assert len(loaded.corpus) == len(corpus)
+    assert loaded.corpus.alphabet == corpus.alphabet
+
+
+def test_save_writes_the_file_atomically_via_rename(
+    corpus: Corpus, tmp_path: Path
+) -> None:
+    """No reader should ever observe a partially written snapshot file.
+
+    `save` must write to a temp path and rename it into place, not write
+    `path` directly — the rename is what makes a concurrent online reader see
+    either the whole old file or the whole new one, never a partial one.
+    """
+    index = InvertedIndex.build(corpus)
+    snapshot_path = tmp_path / "snapshot.index"
+
+    index.save(snapshot_path)
+
+    leftover_temp_files = [
+        entry for entry in tmp_path.iterdir() if entry != snapshot_path
+    ]
+    assert leftover_temp_files == []
+
+
+def test_load_rejects_a_file_from_an_unknown_format_version(
+    corpus: Corpus, tmp_path: Path
+) -> None:
+    index = InvertedIndex.build(corpus)
+    snapshot_path = tmp_path / "snapshot.index"
+    index.save(snapshot_path)
+
+    payload = pickle.loads(snapshot_path.read_bytes())
+    payload["format_version"] = 999
+    snapshot_path.write_bytes(pickle.dumps(payload))
+
+    with pytest.raises(ValueError):
+        InvertedIndex.load(snapshot_path)

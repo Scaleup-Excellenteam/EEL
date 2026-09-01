@@ -111,13 +111,15 @@ class TestCliInterface:
 # of raising is how false green builds start.
 STILL_STUBBED: dict[str, list] = {}
 
-# Deferred, by decision rather than by omission: InvertedIndex.save/load are
-# unimplemented on purpose. SPEC.md 7.4 puts persistence behind a flag and says
-# to revisit at M3 with a measured build time in hand.
-DEFERRED = [
-    lambda: index.InvertedIndex.save(None, None),
-    lambda: index.InvertedIndex.load(None),
-]
+# InvertedIndex.save/load were deferred by decision rather than by omission —
+# SPEC.md 7.4 put persistence behind a flag and said to revisit at M3 with a
+# measured build time in hand. The README already records that measurement
+# (21 s on the full corpus), and the ZDT feature (see src/snapshot.py) is that
+# revisit: save/load are real now, so DEFERRED stays empty rather than
+# asserting a NotImplementedError that would no longer be true. Kept as the
+# place to re-register an entry point if persistence is ever stubbed out
+# again.
+DEFERRED: list = []
 
 
 class TestStubsFailLoudly:

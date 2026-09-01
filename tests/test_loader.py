@@ -195,6 +195,24 @@ def test_calls_normalize_and_removes_only_line_terminators(
     }
 
 
+def test_snapshot_round_trip_preserves_every_record_and_the_alphabet() -> None:
+    """`to_snapshot`/`from_snapshot` are the ZDT persistence hand-off (SPEC.md 7.4):
+
+    the offline stage loads a corpus once, and a `from_snapshot(to_snapshot())`
+    round trip on a later process must reproduce it exactly, byte for byte, or
+    the line-ID ordering contract silently breaks on reload.
+    """
+    original = Corpus.load(FIXTURE_ROOT)
+
+    restored = Corpus.from_snapshot(original.to_snapshot())
+
+    assert len(restored) == len(original)
+    assert restored.alphabet == original.alphabet
+    assert [restored[line_id] for line_id in range(len(restored))] == [
+        original[line_id] for line_id in range(len(original))
+    ]
+
+
 def test_invalid_utf8_is_replaced_before_normalization(
     tmp_path: Path, monkeypatch
 ) -> None:

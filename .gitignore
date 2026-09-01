@@ -9,3 +9,7 @@ Archive/
 Archive.zip
 *.idx
 *.index
+
+# ZDT snapshots: versioned directories + the `current` pointer, all generated
+# by build_snapshot.py — see src/snapshot.py.
+snapshots/

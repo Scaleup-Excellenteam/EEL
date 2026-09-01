@@ -44,6 +44,8 @@ that and was wrong.
 """
 
 import heapq
+import os
+import pickle
 import re
 from array import array
 from bisect import bisect_left
@@ -55,6 +57,10 @@ from src.loader import Corpus
 # A candidate word set wider than this is treated as too broad to be worth
 # pricing; some other token in the pattern will almost always be narrower.
 _MAX_CANDIDATE_WORDS = 512
+
+# Bumped whenever the on-disk snapshot layout changes, so `load` can refuse a
+# file written by an incompatible version instead of misreading it.
+_SNAPSHOT_FORMAT_VERSION = 1
 
 
 class InvertedIndex:
@@ -79,6 +85,16 @@ class InvertedIndex:
         # All words in one string, space-delimited, for infix lookup at C speed.
         # A word never contains a space, so the delimiters cannot be crossed.
         self._word_blob = " " + " ".join(words_sorted) + " " if words_sorted else " "
+
+    @property
+    def corpus(self) -> Corpus:
+        """The corpus this index was built over.
+
+        Public so a caller that only has an `InvertedIndex` loaded from a
+        snapshot (see `load` below) can still construct an `AutoCompleteEngine`
+        without having to load or thread the corpus through separately.
+        """
+        return self._corpus
 
     @classmethod
     def build(cls, corpus: Corpus) -> "InvertedIndex":
@@ -237,11 +253,52 @@ class InvertedIndex:
                 yield line_id
 
     def save(self, path: Path) -> None:
-        raise NotImplementedError("persistence is deferred until shared M0 integration")
+        """Persist this index and its corpus to `path` in one file.
+
+        This is the offline half of ZDT's filesystem hand-off (see
+        `src/snapshot.py`): the online side never touches the corpus root or
+        rebuilds the index, it only reads whatever file this writes.
+
+        Written atomically — to a temp file in the same directory, then
+        renamed into place — so a reader polling `path` never observes a
+        partially written file. `os.replace` is a single rename() syscall on
+        POSIX, which cannot interleave with a concurrent open() of `path`.
+        """
+        path = Path(path)
+        payload = {
+            "format_version": _SNAPSHOT_FORMAT_VERSION,
+            "corpus": self._corpus.to_snapshot(),
+            "postings": self._postings,
+            "word_ranges": self._word_ranges,
+            "words_sorted": self._words_sorted,
+            "reversed_words_sorted": self._reversed_words_sorted,
+        }
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        with temp_path.open("wb") as file:
+            pickle.dump(payload, file, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temp_path, path)
 
     @classmethod
     def load(cls, path: Path) -> "InvertedIndex":
-        raise NotImplementedError("persistence is deferred until shared M0 integration")
+        """Load an index and its corpus from a file written by `save`."""
+        with Path(path).open("rb") as file:
+            payload = pickle.load(file)
+
+        format_version = payload.get("format_version")
+        if format_version != _SNAPSHOT_FORMAT_VERSION:
+            raise ValueError(
+                f"unsupported snapshot format version {format_version!r} "
+                f"(expected {_SNAPSHOT_FORMAT_VERSION!r})"
+            )
+
+        corpus = Corpus.from_snapshot(payload["corpus"])
+        return cls(
+            corpus,
+            payload["postings"],
+            payload["word_ranges"],
+            payload["words_sorted"],
+            payload["reversed_words_sorted"],
+        )
 
 
 def _bounded_prefix_scan(
