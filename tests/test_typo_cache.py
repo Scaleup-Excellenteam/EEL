@@ -1,5 +1,8 @@
 """Tests for the typo cache and its first-check hook in the engine."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from src import autocomplete as autocomplete_module
@@ -68,6 +71,16 @@ def test_record_increments_frequency_for_the_same_typo():
 
 def test_unknown_typo_lookup_returns_none():
     assert TypoCache().lookup("unknwon") is None
+
+
+def test_save_writes_entries_as_json(tmp_path: Path):
+    cache = TypoCache()
+    cache.record("arrray", "array")
+    path = tmp_path / "cache.json"
+
+    cache.save(path)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"arrray": ["array", 1]}
 
 
 def test_does_not_record_empty_or_identical_strings():
