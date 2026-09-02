@@ -104,6 +104,30 @@ def test_drop_least_frequent_removes_the_lowest_half():
     assert cache.lookup("top") == ("ok", 4)
 
 
+def test_new_typo_is_dropped_once_the_cache_is_full():
+    cache = TypoCache(max_entries=2)
+    cache.record("aaa", "ok")
+    cache.record("bbb", "ok")
+
+    cache.record("ccc", "ok")
+
+    assert cache.lookup("aaa") == ("ok", 1)
+    assert cache.lookup("bbb") == ("ok", 1)
+    assert cache.lookup("ccc") is None
+    assert len(cache._entries) == 2
+
+
+def test_existing_typo_still_increments_while_the_cache_is_full():
+    cache = TypoCache(max_entries=1)
+    cache.record("aaa", "ok")
+
+    cache.record("aaa", "ok")
+    cache.record("bbb", "ok")
+
+    assert cache.lookup("aaa") == ("ok", 2)
+    assert cache.lookup("bbb") is None
+
+
 def test_does_not_record_empty_or_identical_strings():
     cache = TypoCache()
 

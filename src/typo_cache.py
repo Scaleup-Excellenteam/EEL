@@ -9,11 +9,15 @@ import json
 from pathlib import Path
 
 
+DEFAULT_MAX_ENTRIES = 10_000
+
+
 class TypoCache:
     """Dictionary of typos to `(correct word, how often that typo appeared)`."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
         self._entries: dict[str, tuple[str, int]] = {}
+        self._max_entries = max_entries
 
     def save(self, path: str | Path) -> None:
         """Write the cache dict to a JSON file."""
@@ -32,12 +36,20 @@ class TypoCache:
             del self._entries[typo]
 
     def record(self, typo: str, correction: str) -> None:
-        """Add a mistake, or increment its frequency if the typo is already known."""
+        """Add a mistake, or increment its frequency if the typo is already known.
+
+        A brand-new typo is dropped once the cache already holds `max_entries`
+        keys — the cache stops growing rather than evicting an existing entry
+        to make room. A typo already in the cache still gets its frequency
+        bumped even while full, since that costs no extra space.
+        """
         if not typo or not correction or typo == correction:
             return
 
         current = self._entries.get(typo)
         if current is None:
+            if len(self._entries) >= self._max_entries:
+                return
             self._entries[typo] = (correction, 1)
             return
 
