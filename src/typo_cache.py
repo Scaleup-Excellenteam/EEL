@@ -5,12 +5,31 @@ scoring. It only remembers misspellings already seen, so a later search can try
 the known fix first among variants that already share the same score.
 """
 
+import json
+from pathlib import Path
+
 
 class TypoCache:
     """Dictionary of typos to `(correct word, how often that typo appeared)`."""
 
     def __init__(self) -> None:
         self._entries: dict[str, tuple[str, int]] = {}
+
+    def save(self, path: str | Path) -> None:
+        """Write the cache dict to a JSON file."""
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(self._entries, file)
+
+    def drop_least_frequent(self, x: float) -> None:
+        """Delete the lowest-frequency `x` fraction of cache entries.
+
+        `x` is a number between 0 and 1. For example, `x=0.5` sorts by
+        frequency and removes the least-used half of the keys.
+        """
+        drop_count = int(len(self._entries) * x)
+        ranked = sorted(self._entries, key=lambda typo: self._entries[typo][1])
+        for typo in ranked[:drop_count]:
+            del self._entries[typo]
 
     def record(self, typo: str, correction: str) -> None:
         """Add a mistake, or increment its frequency if the typo is already known."""
