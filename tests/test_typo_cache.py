@@ -83,6 +83,27 @@ def test_save_writes_entries_as_json(tmp_path: Path):
     assert json.loads(path.read_text(encoding="utf-8")) == {"arrray": ["array", 1]}
 
 
+def test_drop_least_frequent_removes_the_lowest_half():
+    cache = TypoCache()
+    cache.record("rare", "ok")
+    cache.record("mid", "ok")
+    cache.record("mid", "ok")
+    cache.record("often", "ok")
+    cache.record("often", "ok")
+    cache.record("often", "ok")
+    cache.record("top", "ok")
+    cache.record("top", "ok")
+    cache.record("top", "ok")
+    cache.record("top", "ok")
+
+    cache.drop_least_frequent(0.5)
+
+    assert cache.lookup("rare") is None
+    assert cache.lookup("mid") is None
+    assert cache.lookup("often") == ("ok", 3)
+    assert cache.lookup("top") == ("ok", 4)
+
+
 def test_does_not_record_empty_or_identical_strings():
     cache = TypoCache()
 
